@@ -7,6 +7,7 @@
 - 🧩 **SimpleForm Menus** – Clean, intuitive menu interface
 - 📦 **Chest Menus** – FakeChest/FakeDoubleChest UI support
 - 📝 **YAML Configuration** – Easy-to-edit menu files
+- ☕  **Java Runtime API** – Build dynamic menus in code with click callbacks
 - 🔁 **PlaceholderAPI Integration** – Use placeholders in titles, content, commands, and messages
 - 💬 **Direct Messages** – Send messages directly to players without using commands
 - ⚡ **Command Execution** – Execute commands when buttons are clicked
@@ -36,6 +37,78 @@
 
 Menus are stored as **YAML** files in the plugin data folder.  
 Each file represents **one menu**.
+
+## ☕ Java Runtime Menu API
+
+Aenu also supports building menus directly from Java for dynamic use cases such as mines, warps, shops, quests, or paginated lists.
+
+### ✅ What the runtime API supports
+
+- Build `form`, `chest`, and `double_chest` menus directly in Java
+- Open a Java-built menu without creating a YAML file
+- Register a Java-built menu once and reopen it later by id
+- Register click callbacks with `onClick(...)`
+- Reuse existing PlaceholderAPI support in titles, content, lore, messages, and commands
+- Jump from a Java menu button to an existing YAML menu with `jump(...)`
+
+### 📘 Example: dynamic form menu
+
+```java
+import me.daoge.aenu.Aenu;
+import me.daoge.aenu.api.RuntimeMenu;
+import me.daoge.aenu.api.RuntimeMenuButton;
+
+RuntimeMenu menu = RuntimeMenu.form("mines")
+        .title("Mines")
+        .content("Choose a mine")
+        .button(RuntimeMenuButton.of("Mine A")
+                .message("§aOpening Mine A...")
+                .onClick(ctx -> {
+                    // your Java logic here
+                    // mineService.teleport(ctx.getPlayer(), mineA);
+                }))
+        .button(RuntimeMenuButton.of("Back")
+                .jump("example"));
+
+Aenu.getInstance().registerRuntimeMenu(menu);
+Aenu.getInstance().openMenu(player, "mines");
+```
+
+### 📦 Example: dynamic chest menu
+
+```java
+RuntimeMenu menu = RuntimeMenu.chest("mines_chest")
+        .title("Mines")
+        .button(RuntimeMenuButton.of("Mine A")
+                .item("minecraft:diamond_pickaxe")
+                .slot(10)
+                .lore("§7Unlocked", "§eClick to enter")
+                .onClick(ctx -> {
+                    // your Java logic here
+                }))
+        .button(RuntimeMenuButton.of("Locked Mine")
+                .item("minecraft:barrier")
+                .slot(13)
+                .lore("§cLocked"));
+
+Aenu.getInstance().registerRuntimeMenu(menu);
+Aenu.getInstance().openMenu(player, "mines_chest");
+```
+
+### 🧾 Runtime menu registration
+
+```java
+RuntimeMenu minesMenu = RuntimeMenu.form("mines")
+        .title("Mines");
+
+Aenu.getInstance().registerRuntimeMenu(minesMenu);
+
+// later
+Aenu.getInstance().openMenu(player, "mines");
+
+// optional cleanup
+Aenu.getInstance().unregisterRuntimeMenu("mines");
+```
 
 ### ⚙️ Menu Configuration Options
 

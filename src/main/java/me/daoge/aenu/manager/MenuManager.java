@@ -2,6 +2,9 @@ package me.daoge.aenu.manager;
 
 import lombok.Getter;
 import me.daoge.aenu.Aenu;
+import me.daoge.aenu.api.MenuClickContext;
+import me.daoge.aenu.api.RuntimeMenu;
+import me.daoge.aenu.api.RuntimeMenuButton;
 import me.daoge.aenu.config.DefaultMenuConfigs;
 import me.daoge.aenu.i18n.TranslationKeys;
 import me.daoge.aenu.model.MenuButton;
@@ -47,6 +50,8 @@ public class MenuManager {
 
     @Getter
     private final Map<String, MenuConfig> menus = new HashMap<>();
+    @Getter
+    private final Map<String, RuntimeMenu> runtimeMenus = new HashMap<>();
 
     private final Yaml yaml;
 
@@ -156,18 +161,32 @@ public class MenuManager {
      * @return true if the player has permission, false otherwise
      */
     public boolean hasMenuPermission(EntityPlayer player, String menuName) {
-        MenuConfig config = menus.get(menuName);
-        if (config == null) {
-            return false;
+        String normalizedMenuName = normalizeMenuId(menuName);
+        MenuConfig config = menus.get(normalizedMenuName);
+        if (config != null) {
+            return hasPermission(player, config.getPermission());
         }
 
+        RuntimeMenu runtimeMenu = runtimeMenus.get(normalizedMenuName);
+        if (runtimeMenu != null) {
+            return hasMenuPermission(player, runtimeMenu);
+        }
+
+        return false;
+    }
+
+    public boolean hasMenuPermission(EntityPlayer player, RuntimeMenu menu) {
+        return hasPermission(player, menu.getPermission());
+    }
+
+    private boolean hasPermission(EntityPlayer player, String permission) {
         // If no permission is set, everyone can access
-        if (config.getPermission() == null || config.getPermission().isEmpty()) {
+        if (permission == null || permission.isEmpty()) {
             return true;
         }
 
         // Check if player has the required permission
-        return player.hasPermission(config.getPermission()).asBoolean();
+        return player.hasPermission(permission).asBoolean();
     }
 
     /**
@@ -178,13 +197,11 @@ public class MenuManager {
      * @return true if the player has permission, false otherwise
      */
     private boolean hasButtonPermission(EntityPlayer player, MenuButton button) {
-        // If no permission is set, everyone can see the button
-        if (button.getPermission() == null || button.getPermission().isEmpty()) {
-            return true;
-        }
+        return hasPermission(player, button.getPermission());
+    }
 
-        // Check if player has the required permission
-        return player.hasPermission(button.getPermission()).asBoolean();
+    private boolean hasButtonPermission(EntityPlayer player, RuntimeMenuButton button) {
+        return hasPermission(player, button.getPermission());
     }
 
     /**
@@ -195,17 +212,60 @@ public class MenuManager {
      * @return true if the menu was shown, false if the menu doesn't exist
      */
     public boolean showMenu(EntityPlayer player, String menuName) {
-        MenuConfig config = menus.get(menuName);
-        if (config == null) {
+        String normalizedMenuName = normalizeMenuId(menuName);
+        MenuConfig config = menus.get(normalizedMenuName);
+        if (config != null) {
+            MenuUiType uiType = resolveUiType(config.getUi());
+            if (uiType != MenuUiType.FORM) {
+                return showChestMenu(player, normalizedMenuName, config, uiType);
+            }
+
+            return showFormMenu(player, config);
+        }
+
+        RuntimeMenu runtimeMenu = runtimeMenus.get(normalizedMenuName);
+        if (runtimeMenu != null) {
+            return showMenu(player, runtimeMenu);
+        }
+
+        return false;
+    }
+
+    public boolean showMenu(EntityPlayer player, RuntimeMenu menu) {
+        if (!hasMenuPermission(player, menu)) {
             return false;
         }
 
-        MenuUiType uiType = resolveUiType(config.getUi());
-        if (uiType != MenuUiType.FORM) {
-            return showChestMenu(player, menuName, config, uiType);
+        if (menu.getUiType() != MenuUiType.FORM) {
+            return showChestMenu(player, menu);
         }
 
-        return showFormMenu(player, config);
+        return showFormMenu(player, menu);
+    }
+
+    public RuntimeMenu registerRuntimeMenu(RuntimeMenu menu) {
+        String menuId = normalizeRuntimeMenuId(menu);
+        RuntimeMenu previous = runtimeMenus.put(menuId, menu);
+        if (menus.containsKey(menuId)) {
+            plugin.getPluginLogger().warn("Registered runtime menu {} shadows a YAML menu with the same id", menuId);
+        }
+        return previous;
+    }
+
+    public RuntimeMenu unregisterRuntimeMenu(String menuId) {
+        return runtimeMenus.remove(normalizeMenuId(menuId));
+    }
+
+    public RuntimeMenu getRuntimeMenu(String menuId) {
+        return runtimeMenus.get(normalizeMenuId(menuId));
+    }
+
+    public boolean hasRuntimeMenu(String menuId) {
+        return runtimeMenus.containsKey(normalizeMenuId(menuId));
+    }
+
+    public void clearRuntimeMenus() {
+        runtimeMenus.clear();
     }
 
     private boolean showFormMenu(EntityPlayer player, MenuConfig config) {
@@ -243,8 +303,8 @@ public class MenuManager {
                 if (buttonConfig.getImage() != null) {
                     MenuButton.ImageConfig imageConfig = buttonConfig.getImage();
                     ImageData.ImageType imageType = "url".equalsIgnoreCase(imageConfig.getType())
-                        ? ImageData.ImageType.URL
-                        : ImageData.ImageType.PATH;
+                            ? ImageData.ImageType.URL
+                            : ImageData.ImageType.PATH;
                     button = form.button(buttonText, imageType, imageConfig.getData());
                 } else {
                     button = form.button(buttonText);
@@ -266,6 +326,54 @@ public class MenuManager {
         }
 
         // Show the form to the player
+        player.getController().viewForm(form);
+        return true;
+    }
+
+    private boolean showFormMenu(EntityPlayer player, RuntimeMenu runtimeMenu) {
+        PlaceholderAPI papi = PlaceholderAPI.getAPI();
+        String title = resolvePlaceholders(player, papi, runtimeMenu.getTitle());
+        String content = resolvePlaceholders(player, papi, runtimeMenu.getContent());
+
+        SimpleForm form = Forms.simple()
+                .title(title)
+                .content(content);
+        AtomicReference<String> pendingJump = new AtomicReference<>();
+        form.onClose(reason -> {
+            String target = pendingJump.getAndSet(null);
+            if (target != null) {
+                jumpToMenu(player, target);
+            }
+        });
+
+        for (RuntimeMenuButton buttonConfig : runtimeMenu.getButtons()) {
+            if (!hasButtonPermission(player, buttonConfig)) {
+                continue;
+            }
+
+            String buttonText = resolvePlaceholders(player, papi, buttonConfig.getText());
+            Button button;
+            if (buttonConfig.getImageType() != null && buttonConfig.getImageData() != null && !buttonConfig.getImageData().isBlank()) {
+                button = form.button(buttonText, buttonConfig.getImageType(), buttonConfig.getImageData());
+            } else {
+                button = form.button(buttonText);
+            }
+
+            button.onClick(btn -> {
+                sendMessages(player, buttonConfig.getMessages());
+                executeCommands(player, buttonConfig.getCommands());
+                MenuClickContext context = new MenuClickContext(player, this, runtimeMenu, buttonConfig);
+                if (buttonConfig.getOnClick() != null) {
+                    buttonConfig.getOnClick().accept(context);
+                }
+
+                String jumpTarget = getJumpTarget(buttonConfig.getJump());
+                if (jumpTarget != null) {
+                    pendingJump.set(jumpTarget);
+                }
+            });
+        }
+
         player.getController().viewForm(form);
         return true;
     }
@@ -358,6 +466,91 @@ public class MenuManager {
         return true;
     }
 
+    private boolean showChestMenu(EntityPlayer player, RuntimeMenu runtimeMenu) {
+        PlaceholderAPI papi = PlaceholderAPI.getAPI();
+        Player controller = player.getController();
+        MenuUiType uiType = runtimeMenu.getUiType();
+        FakeContainer container = uiType == MenuUiType.DOUBLE_CHEST
+                ? FakeContainerFactory.getFactory().createFakeDoubleChestContainer()
+                : FakeContainerFactory.getFactory().createFakeChestContainer();
+        AtomicReference<String> pendingJump = new AtomicReference<>();
+        container.addCloseListener(viewer -> {
+            String target = pendingJump.getAndSet(null);
+            if (target != null) {
+                var server = Server.getInstance();
+                server.getScheduler().runLater(server, () -> jumpToMenu(player, target));
+            }
+        });
+
+        String title = resolvePlaceholders(player, papi, runtimeMenu.getTitle());
+        if (!title.isEmpty()) {
+            container.setCustomName(title);
+        }
+
+        int size = uiType == MenuUiType.DOUBLE_CHEST ? 54 : 27;
+        boolean[] usedSlots = new boolean[size];
+        int nextAutoSlot = 0;
+
+        for (RuntimeMenuButton buttonConfig : runtimeMenu.getButtons()) {
+            if (!hasButtonPermission(player, buttonConfig)) {
+                continue;
+            }
+
+            Integer preferredSlot = buttonConfig.getSlot();
+            int slot;
+            if (preferredSlot != null) {
+                slot = preferredSlot;
+                if (slot < 0 || slot >= size) {
+                    plugin.getPluginLogger().warn("Runtime menu {} has button slot out of range: {}", runtimeMenu.getId(), slot);
+                    continue;
+                }
+                if (usedSlots[slot]) {
+                    plugin.getPluginLogger().warn("Runtime menu {} has duplicate button slot: {}", runtimeMenu.getId(), slot);
+                    continue;
+                }
+            } else {
+                slot = findNextFreeSlot(usedSlots, nextAutoSlot);
+                if (slot == -1) {
+                    plugin.getPluginLogger().warn("Runtime menu {} has more buttons than slots", runtimeMenu.getId());
+                    break;
+                }
+                nextAutoSlot = slot + 1;
+            }
+
+            usedSlots[slot] = true;
+
+            ItemStack itemStack = createButtonItemStack(player, papi, runtimeMenu.getId(), buttonConfig);
+            boolean hasActions = hasButtonActions(buttonConfig);
+            if (hasActions) {
+                container.setItemStackWithListener(slot, itemStack, () -> {
+                    sendMessages(player, buttonConfig.getMessages());
+                    executeCommands(player, buttonConfig.getCommands());
+                    MenuClickContext context = new MenuClickContext(player, this, runtimeMenu, buttonConfig);
+                    if (buttonConfig.getOnClick() != null) {
+                        buttonConfig.getOnClick().accept(context);
+                    }
+
+                    String jumpTarget = getJumpTarget(buttonConfig.getJump());
+                    if (jumpTarget != null) {
+                        pendingJump.set(jumpTarget);
+                    }
+                    if (buttonConfig.isClose()) {
+                        container.removeViewer(controller);
+                        return;
+                    }
+                    if (jumpTarget != null) {
+                        container.removeViewer(controller);
+                    }
+                });
+            } else {
+                container.setItemStack(slot, itemStack);
+            }
+        }
+
+        container.addPlayer(controller);
+        return true;
+    }
+
     private ItemStack createButtonItemStack(EntityPlayer player, PlaceholderAPI papi, String menuName, MenuButton buttonConfig) {
         String itemName = buttonConfig.getItem();
         if (itemName == null || itemName.isBlank()) {
@@ -398,6 +591,46 @@ public class MenuManager {
         return itemStack;
     }
 
+    private ItemStack createButtonItemStack(EntityPlayer player, PlaceholderAPI papi, String menuName, RuntimeMenuButton buttonConfig) {
+        String itemName = buttonConfig.getItem();
+        if (itemName == null || itemName.isBlank()) {
+            itemName = "minecraft:paper";
+        } else if (!itemName.contains(":")) {
+            itemName = "minecraft:" + itemName;
+        }
+
+        ItemType<?> itemType;
+        try {
+            itemType = ItemTypeGetter.name(itemName).itemType();
+        } catch (IllegalArgumentException e) {
+            plugin.getPluginLogger().warn("Runtime menu {} has invalid item name: {}", menuName, itemName);
+            itemType = ItemTypes.BARRIER;
+        }
+
+        if (itemType == ItemTypes.UNKNOWN) {
+            plugin.getPluginLogger().warn("Runtime menu {} has unknown item name: {}", menuName, itemName);
+            itemType = ItemTypes.BARRIER;
+        }
+
+        int count = Math.max(1, buttonConfig.getCount());
+        int meta = Math.max(0, buttonConfig.getMeta());
+        ItemStack itemStack = itemType.createItemStack(count, meta);
+
+        String displayName = buttonConfig.getText();
+        if (displayName != null && !displayName.isEmpty()) {
+            itemStack.setCustomName(resolvePlaceholders(player, papi, displayName));
+        }
+
+        List<String> lore = buttonConfig.getLore();
+        if (!lore.isEmpty()) {
+            itemStack.setLore(lore.stream()
+                    .map(line -> resolvePlaceholders(player, papi, line))
+                    .toList());
+        }
+
+        return itemStack;
+    }
+
     private boolean hasButtonActions(MenuButton buttonConfig) {
         return (buttonConfig.getMessages() != null && !buttonConfig.getMessages().isEmpty())
                 || (buttonConfig.getCommands() != null && !buttonConfig.getCommands().isEmpty())
@@ -405,8 +638,19 @@ public class MenuManager {
                 || getJumpTarget(buttonConfig) != null;
     }
 
+    private boolean hasButtonActions(RuntimeMenuButton buttonConfig) {
+        return !buttonConfig.getMessages().isEmpty()
+                || !buttonConfig.getCommands().isEmpty()
+                || buttonConfig.isClose()
+                || buttonConfig.getOnClick() != null
+                || getJumpTarget(buttonConfig.getJump()) != null;
+    }
+
     private String getJumpTarget(MenuButton buttonConfig) {
-        String jump = buttonConfig.getJump();
+        return getJumpTarget(buttonConfig.getJump());
+    }
+
+    private String getJumpTarget(String jump) {
         if (jump == null) {
             return null;
         }
@@ -480,6 +724,10 @@ public class MenuManager {
         }
     }
 
+    public void sendRuntimeMessage(EntityPlayer player, String message) {
+        sendMessages(player, List.of(message));
+    }
+
     /**
      * Execute a list of commands for a player
      * Commands are executed as if the player typed them
@@ -508,6 +756,10 @@ public class MenuManager {
         }
     }
 
+    public void executeRuntimeCommand(EntityPlayer player, String command) {
+        executeCommands(player, List.of(command));
+    }
+
     /**
      * Clear all loaded menus
      */
@@ -519,14 +771,15 @@ public class MenuManager {
      * Get the number of loaded menus
      */
     public int getMenuCount() {
-        return menus.size();
+        return menus.size() + runtimeMenus.size();
     }
 
     /**
      * Check if a menu exists
      */
     public boolean hasMenu(String menuName) {
-        return menus.containsKey(menuName);
+        String normalizedMenuName = normalizeMenuId(menuName);
+        return menus.containsKey(normalizedMenuName) || runtimeMenus.containsKey(normalizedMenuName);
     }
 
     /**
@@ -536,19 +789,38 @@ public class MenuManager {
      * @return A list of accessible menu names
      */
     public java.util.List<String> getAccessibleMenus(EntityPlayer player) {
-        return menus.entrySet().stream()
-                .filter(entry -> {
-                    MenuConfig config = entry.getValue();
-                    // If no permission is set, everyone can access
-                    if (config.getPermission() == null || config.getPermission().isEmpty()) {
-                        return true;
-                    }
-                    // Check if player has the required permission
-                    return player.hasPermission(config.getPermission()).asBoolean();
-                })
-                .map(Map.Entry::getKey)
+        var yamlMenus = menus.entrySet().stream()
+                .filter(entry -> hasPermission(player, entry.getValue().getPermission()))
+                .map(Map.Entry::getKey);
+        var dynamicMenus = runtimeMenus.entrySet().stream()
+                .filter(entry -> hasPermission(player, entry.getValue().getPermission()))
+                .map(Map.Entry::getKey);
+
+        return java.util.stream.Stream.concat(yamlMenus, dynamicMenus)
+                .distinct()
                 .sorted()
                 .toList();
+    }
+
+    private String normalizeRuntimeMenuId(RuntimeMenu menu) {
+        if (menu == null) {
+            throw new IllegalArgumentException("Runtime menu cannot be null");
+        }
+
+        return normalizeMenuId(menu.getId());
+    }
+
+    private String normalizeMenuId(String menuId) {
+        if (menuId == null) {
+            throw new IllegalArgumentException("Menu id cannot be null");
+        }
+
+        String normalizedMenuId = menuId.trim();
+        if (normalizedMenuId.isEmpty()) {
+            throw new IllegalArgumentException("Menu id cannot be blank");
+        }
+
+        return normalizedMenuId;
     }
 
     private MenuUiType resolveUiType(String ui) {
