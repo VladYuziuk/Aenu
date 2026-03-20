@@ -40,54 +40,6 @@ public class Aenu extends Plugin {
         // Register the /menu command
         Registries.COMMANDS.register(new MenuCommand());
 
-        RuntimeMenu menu = RuntimeMenu.form("mines")
-                .title("Mines")
-                .content("Choose a mine")
-                .button(RuntimeMenuButton.of("Mine A")
-                        .message("§aOpening Mine A...")
-                        .onClick(ctx -> {
-                            // your Java logic here
-                            // mineService.teleport(ctx.getPlayer(), mineA);
-                        }))
-                .button(RuntimeMenuButton.of("Back")
-                        .jump("example"));
-
-        registerRuntimeMenu(menu);
-
-        RuntimeMenu c_menu = RuntimeMenu.chest("mines_chest")
-                .title("Mines")
-                .button(RuntimeMenuButton.of("Mine A")
-                        .item("minecraft:diamond_pickaxe")
-                        .slot(10)
-                        .lore("§7Unlocked", "§eClick to enter")
-                        .message("Testtttt")
-                        .onClick(ctx -> {
-                            // your Java logic here
-                        }))
-                .button(RuntimeMenuButton.of("Locked Mine")
-                        .item("minecraft:barrier")
-                        .slot(13)
-                        .lore("§cLocked"));
-
-        registerRuntimeMenu(c_menu);
-
-        RuntimeMenu d_c_menu = RuntimeMenu.doubleChest("mines_double_chest")
-                .title("Mines")
-                .button(RuntimeMenuButton.of("Mine A")
-                        .item("minecraft:diamond_pickaxe")
-                        .slot(10)
-                        .lore("§7Unlocked", "§eClick to enter")
-                        .message("Testtttt2")
-                        .onClick(ctx -> {
-                            // your Java logic here
-                        }))
-                .button(RuntimeMenuButton.of("Locked Mine")
-                        .item("minecraft:barrier")
-                        .slot(13)
-                        .lore("§cLocked"));
-
-        registerRuntimeMenu(d_c_menu);
-
         this.pluginLogger.info("Aenu has been enabled! Loaded {} menus.", menuManager.getMenuCount());
     }
 
